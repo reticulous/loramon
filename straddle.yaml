@@ -1,0 +1,44 @@
+# loramon — LoRaMon: the per-on-air-frame viewer, on the LCD and in the browser.
+#
+# One graph per radio showing every frame that went over the air, placed by
+# transmit power or received signal on a dBm axis, coloured by direction and
+# audience, over a window from ten seconds to an hour. Two surfaces, one view:
+# an LcdApp painted into an RGB565 canvas, and a Dock window in the SPA.
+#
+# This straddle is the READER. iface-lora is the recorder: it publishes one
+# storage node per frame at `lora.<n>.packets.<ms>`, the channel-RSSI series at
+# `lora.<n>.rssi`, the rolling hour at `lora.<n>.air1h.{rx,tx}` and the
+# neighbourhood at `lora.<n>.peers.<slot>`. None of that is published unless
+# this straddle is in the build — iface-lora gates the whole publishing half on
+# CONFIG_STRADDLE_LORAMON — and even then only while a viewer here says it is
+# looking (`sys.stats.web_loramon` / `sys.stats.lcd_loramon`, and
+# `sys.stats.web_peers` for the neighbourhood).
+#
+# iface-lora additional_installs this, so a build with the radio gets the
+# viewer. Drop it with --without loramon: the radio keeps working and loses
+# every per-frame storage write, the 1 Hz RSSI beat and the 16 KB-per-radio
+# expiry FIFO with it. The requires: back-edge onto iface-lora is the benign
+# additional_installs cycle.
+schema_version: 1
+name: reticulous/loramon
+prefix: loramon
+version: 0.0.0
+firmware: esp-idf
+browser: browser
+platforms: [idf]
+# Hard: the LCD app asks the peer table for the name behind a frame's tag
+# (loraNameForTag), and there is nothing to view without the recorder.
+requires:
+  - reticulous/iface-lora
+# The LCD half, whole: LoraMonApp is an LcdApp, so this entry installs its
+# launcher tile and runs its boot wiring. when:-gated on spangap-lcd — the
+# class lives under conditional/spangap-lcd/, so without the lcd straddle
+# staged neither the trampoline nor the class compiles, and the browser half
+# is all that remains.
+services:
+  - { class: LoraMonApp, header: loramon_app.h, when: spangap/spangap-lcd }
+# Browser-side UI registration — auto-wired into the buildable SPA via
+# straddles.gen.ts. Adds the "LoRaMon" Dock app and self-mounts its window.
+# No module: — the entry file is modules/loramon.ts, which is the default.
+browser_register:
+  - call: registerLoraMon

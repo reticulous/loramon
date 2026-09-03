@@ -1,0 +1,9 @@
+description: "loramon: LoRaMon — the per-on-air-frame LoRa airtime/signal viewer for reticulous (LCD app + browser window)."
+url: https://github.com/reticulous/loramon
+version: "0.1.0"
+license: "Apache-2.0"
+targets:
+  - esp32s3
+dependencies:
+  idf:
+    version: ">=5.5"
