@@ -218,7 +218,7 @@ function colourOf(rec: Rec): string {
  * and there may be thousands: the device sends a byte, each viewer holds its
  * own table. Codes are appended to, never renumbered. */
 const DESC = [
-  '', 'PRIVSYNC', 'ANNOUNCE2', 'HAVEDATA', 'GIMME', 'THATSIT', 'BYE', 'RESEND',
+  '', 'HAIL', 'ANNOUNCE', 'HAVE', 'GIMME', 'THATSIT', 'BYE', 'RESEND',
   'data', 'announce', 'link request', 'proof', 'split', 'RNode',
 ] as const
 const descOf = (d: number) => DESC[d] ?? ''
