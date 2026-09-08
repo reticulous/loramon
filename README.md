@@ -11,19 +11,35 @@ pick a window pill 10s…1hr            → what the plot spans
 drag across the plot                  → zoom to that span; back pill leaves it
 tap a frame                           → what it was and who it was with, along the top
  ↓
-close it                              → the device stops recording and drops the subtree
+background it (another app, Home)     → the session continues; recording does not pause
+ ↓
+stop it (recents swipe-up, or close
+the browser window)                   → the device stops recording and drops the subtree
 ```
 
 Three things that follow from the ladder, and surprise people otherwise:
 
-- **The graph starts empty, every time.** Recording is gated on an app being
+- **The graph starts empty on every open.** Recording is gated on an app being
   open, because a device recording per-frame telemetry nobody is reading is
-  paying flash writes and a 1 Hz radio sample for nothing.
+  paying a 1 Hz radio sample, a 1 Hz interface-task beat and up to half a
+  megabyte of tree nodes for nothing. (The records themselves are unprefixed
+  keys — in RAM, never written to flash.)
 - **Both surfaces show the same thing.** The LCD app and the browser window read
   the same records and draw the same axes and colours. The browser glides and
   the LCD steps, and that is the only difference you should be able to see.
-- **Closing it deletes the records.** Nothing accumulates on the device between
-  sessions.
+- **Stopping it deletes the records; backgrounding it does not.** The session is
+  the app's life, not its visibility — reaching for Settings mid-watch and coming
+  back must not cost the history you were watching accumulate, so the sentinel is
+  written from `onCreate`/`onClose` rather than `onShow`/`onHide`. What ends a
+  session on the device is a recents swipe-up (or a memory-pressure eviction,
+  which runs the same `onClose`), and in the browser closing the window. Nothing
+  accumulates between sessions.
+- **A backgrounded session keeps costing.** Left in recents with the screen off,
+  it holds the 1 Hz sample and the 1 Hz interface beat against light sleep —
+  around 0.2–0.5 mA on top of the radio's own standing RX draw, so a few percent
+  of an idle node. The heap is the larger figure: the subtree grows toward
+  `LORA_MON_CAP` (4096 nodes per radio, roughly half a megabyte of PSRAM at the
+  ceiling) and stays there until the app is stopped.
 
 ## What it is
 
@@ -71,7 +87,7 @@ command sentinels, all of them "a viewer is looking":
 
 | Key | Written by | Meaning |
 |---|---|---|
-| `sys.stats.lcd_loramon` | the LCD app, from `onShow`/`onHide` | `1` while the on-device app is up |
+| `sys.stats.lcd_loramon` | the LCD app, from `onCreate`/`onClose` | `1` while the on-device app is running — foreground or background, until it is stopped or evicted |
 | `sys.stats.web_loramon` | the browser window, while visible | `1` while the browser window is up |
 | `sys.stats.web_peers` | the browser window, while visible | `1` while a reader wants `lora.<n>.peers.<slot>` — the browser only; the LCD app asks the peer table directly |
 

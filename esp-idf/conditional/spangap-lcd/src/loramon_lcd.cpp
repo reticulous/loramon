@@ -43,7 +43,9 @@
  * dwell — where the radio was), and deletes them past 1 h. We rebuild our view
  * by iterating that subtree each redraw (so expiry — which doesn't fire
  * subscribe callbacks — is handled), and setting `sys.stats.lcd_loramon` tells
- * the firmware to record while we're up. The caption's two figures — what we
+ * the firmware to record for as long as this app is running — backgrounded
+ * included, since the records are the session and switching away must not end
+ * one. The caption's two figures — what we
  * transmitted, and how much of the channel was in use at all — are computed
  * here from those records for the selected window; the 1-hour pair is the one
  * the firmware publishes itself (`lora.<n>.air1h.{rx,tx}`, per mille), because
@@ -1265,12 +1267,18 @@ void LoraMonApp::onCreate(lv_obj_t* root) {
     mkAxisName(root, "tx", true);
     mkAxisName(root, "rx", false);
 
+    /* Recording follows the app's LIFE, not its visibility: the records are the
+     * session, and a glance at Settings must not end it. Paired with the clear
+     * in onClose, which the shell runs for both a recents swipe-up and a
+     * memory-pressure eviction. */
+    storageSet("sys.stats.lcd_loramon", 1);
+
     drawAll();
     timer(tickCb, 1000, this);
 }
 
-void LoraMonApp::onShow() { s.visible = true; storageSet("sys.stats.lcd_loramon", 1); drawAll(); }
-void LoraMonApp::onHide() { s.visible = false; storageSet("sys.stats.lcd_loramon", 0); }
+void LoraMonApp::onShow() { s.visible = true; drawAll(); }
+void LoraMonApp::onHide() { s.visible = false; }
 void LoraMonApp::onClose() {
     storageSet("sys.stats.lcd_loramon", 0);
     free(s.buf);

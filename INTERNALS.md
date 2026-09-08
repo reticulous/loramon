@@ -225,8 +225,8 @@ already pushes; the repaint is `requestAnimationFrame` against an extrapolated
 device clock, which is why a live window glides rather than steps.
 
 The LCD half runs on the **lcd task**, like every `LcdApp`, and touches nothing
-else: `onShow`/`onHide` write one storage key each, and the 1 s redraw does a
-`storageForEach` and paints. It holds no lock, spawns no task, and never calls
+else: `onCreate`/`onClose` write one storage key each, `onShow`/`onHide` only
+flip the redraw gate, and the 1 s redraw does a `storageForEach` and paints. It holds no lock, spawns no task, and never calls
 into the radio. The one cross-straddle call, `loraNameForTag`, reads the peer
 table under the table's own lock.
 
@@ -236,11 +236,24 @@ radio does would make "open the monitor" an action with side effects on the air.
 
 ## 4. Pitfalls
 
-- **The watch key must be cleared on close, and close means every way out.**
-  The LCD app writes it from `onHide`, which the launcher calls for a back-out,
-  a sleep and an app switch alike; the browser writes it from the window's
-  visibility watcher and from `onUnmounted`. A key left at 1 leaves the device
-  recording — and holding a 1 Hz RSSI beat — for nobody.
+- **The watch key tracks the app's life, not its visibility, and must be cleared
+  on every way out.** The LCD app writes it from `onCreate`/`onClose`: a
+  backgrounded session goes on recording, because the records *are* the session
+  and a glance at Settings must not delete an hour of them. `onClose` is the only
+  clear, and the shell runs it for both a recents swipe-up and a memory-pressure
+  eviction, so there is no path out that skips it. The browser writes it from the
+  window's visibility watcher and from `onUnmounted` — there closing the window
+  *is* the stop. A key left at 1 leaves the device recording — holding a 1 Hz
+  RSSI beat and growing the subtree toward `LORA_MON_CAP` — for nobody.
+- **One graph where the operator set a nine-channel regime is not this
+  straddle's bug.** Both surfaces count lanes from `lora.<n>.chans`, and
+  iface-lora publishes the agile set only while SUPE is *running* — not while
+  `s.lora.<n>.SUPE.enable` merely says so. The keys are persisted config and the
+  engine is a compile-time symbol, so they part company easily: an image built
+  `CONFIG_LORA_NO_SUPE=y` (the whole `stable` catalogue) keeps a stored
+  `SUPE.enable = 1` visible to `show s.lora` while nothing reads it. Before
+  looking here, read `lora.<n>.chans` — a single entry means the device said one
+  channel, and the answer is upstream.
 - **`sys.stats.web_peers` is the browser's alone.** The LCD app must not set it:
   it is in the same binary as the peer table and asks it directly, and setting
   the key would make the device serialise every peer row on every stats beat for
