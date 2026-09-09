@@ -134,7 +134,7 @@ struct Rec { uint32_t t; uint8_t dir; uint32_t dur; uint32_t bytes; int rssi; in
  * table the browser keeps, kept short because this one is read on a strip of
  * screen a few characters wide. Codes are appended to, never renumbered. */
 static const char* const kDesc[] = {
-    "", "HAIL", "ANNOUNCE", "HAVE", "GIMME", "THATSIT", "BYE",
+    "", "HAIL", "ANNOUNCE", "GOT", "READY", "END", "BYE",
     "RESEND", "data", "announce", "link req", "proof", "split", "RNode",
 };
 static const char* descOf(uint8_t d) {

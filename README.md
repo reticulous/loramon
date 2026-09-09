@@ -29,7 +29,7 @@ Three things that follow from the ladder, and surprise people otherwise:
   the LCD steps, and that is the only difference you should be able to see.
 - **Stopping it deletes the records; backgrounding it does not.** The session is
   the app's life, not its visibility — reaching for Settings mid-watch and coming
-  back must not cost the history you were watching accumulate, so the sentinel is
+  back must not cost the history you were watching accumulate, so the command key is
   written from `onCreate`/`onClose` rather than `onShow`/`onHide`. What ends a
   session on the device is a recents swipe-up (or a memory-pressure eviction,
   which runs the same `onClose`), and in the browser closing the window. Nothing
@@ -83,7 +83,7 @@ and the settings pane and status bar keep everything they read.
 ## Storage variables
 
 This straddle owns no settings and publishes no telemetry. It writes three
-command sentinels, all of them "a viewer is looking":
+command keys, all of them "a viewer is looking":
 
 | Key | Written by | Meaning |
 |---|---|---|
