@@ -80,6 +80,10 @@ constexpr int CB_BOX   = 12;
 constexpr int CB_HIT   = 8;
 constexpr int CB_CAP_W = 24;      /* "attr" in the 8 px mono face, and its gap */
 constexpr int CB_W     = CB_BOX + CB_CAP_W + CB_HIT;
+/* The detail box beside it, asking the device for the two extra fields. Its
+ * caption is shorter and it needs no hit margin of its own — the attribute
+ * slot's margin sits between them. */
+constexpr int CB_DET_W = CB_BOX + CB_CAP_W;
 
 /* The agile-channel strips under the hailing plot. Small by design: on this
  * screen a lane's job is to say *when* the radio was there and whether anything
@@ -134,9 +138,35 @@ struct Rec { uint32_t t; uint8_t dir; uint32_t dur; uint32_t bytes; int rssi; in
  * table the browser keeps, kept short because this one is read on a strip of
  * screen a few characters wide. Codes are appended to, never renumbered. */
 static const char* const kDesc[] = {
-    "", "HAIL", "ANNOUNCE", "GOT", "READY", "END", "BYE",
-    "RESEND", "data", "announce", "link req", "proof", "split", "RNode",
+    "", "SUPE_HAIL", "SUPE_ANNOUNCE", "SUPE_GOT", "SUPE_READY", "SUPE_END",
+    "SUPE_BYE", "SUPE_RESEND",
+    "DATA", "ANNOUNCE", "LINKREQUEST", "PROOF", "split", "RNode",
+    /* 14 — the Reticulum header past its packet-type bits. */
+    "PATH_REQUEST", "PATH_RESPONSE", "TUNNEL_SYNTHESIZE", "PLAIN",
+    "LRPROOF", "LINKPROOF", "RESOURCE_PRF", "GROUP", "LINK",
+    "RESOURCE", "RESOURCE_ADV", "RESOURCE_REQ", "RESOURCE_HMU",
+    "RESOURCE_ICL", "RESOURCE_RCL", "CACHE_REQUEST",
+    "REQUEST", "RESPONSE", "COMMAND", "COMMAND_STATUS", "CHANNEL",
+    "KEEPALIVE", "LINKIDENTIFY", "LINKCLOSE", "LRRTT",
 };
+/* How to read the detail's subject field, by what the frame is — the device
+ * sends the value, each viewer supplies the word. Anything not named here is a
+ * packet whose own hash is the most useful thing to say about it. */
+static const char* subjWord(uint8_t d) {
+    switch (d) {
+        case 1: case 2: case 3: case 4: case 5: case 6: case 7: return "from";
+        case 14: return "asks";
+        case 29: return "wants";
+        case 9: case 15: return "serves";
+        case 10: return "link";
+        case 11: case 18: case 19: case 20: return "proves";
+        case 16: case 17: return "says";
+        case 22: case 23: case 24: case 25: case 26: case 27: case 28:
+        case 30: case 31: case 32: case 33: case 34: case 35: case 36:
+        case 37: case 38: return "with";
+        default: return "hash";
+    }
+}
 static const char* descOf(uint8_t d) {
     return d < (uint8_t)(sizeof kDesc / sizeof kDesc[0]) ? kDesc[d] : "";
 }
@@ -246,6 +276,19 @@ struct State {
      * lookup walks a storage subtree. */
     char      insTag[7] = "";
     char      insName[40] = "";
+    /* Whether the device records what each frame is ABOUT. Off by default and
+     * asked of the device, not of this drawing: it makes every record carry two
+     * more fields for as long as the ring holds it. */
+    bool      detailed = false;
+    lv_obj_t* detBox = nullptr;
+    lv_obj_t* detMark = nullptr;
+    /* The inspected frame's two detail fields, read from its own storage node
+     * when the tap lands rather than held for all 4096 records — only one is
+     * ever being read, and the whole array lives in PSRAM. */
+    uint32_t  insDetT = 0;           /* which record the three below belong to */
+    char      insTo[25] = "";
+    char      insSubj[25] = "";
+    char      insHash[7] = "";
     bool      visible = false;
 };
 State s;
@@ -365,6 +408,25 @@ int airPermille(uint32_t lo, uint32_t hi, int dir) {
     return (int)(busy * 1000 / win);
 }
 
+/* The nth |-separated field of a record value, copied out — field 0 being the
+ * direction token. Split rather than scanned: a detail field holds a space (the
+ * hop count rides with the destination), and `%s` would stop at it, so the one
+ * parse that has to be right about every field cannot be a format string. */
+void monField(const char* v, int n, char* out, size_t max) {
+    out[0] = '\0';
+    const char* p = v;
+    for (int i = 0; i < n && p; i++) {
+        p = strchr(p, '|');
+        if (p) p++;
+    }
+    if (!p) return;
+    const char* e = strchr(p, '|');
+    size_t len = e ? (size_t)(e - p) : strlen(p);
+    if (len >= max) len = max - 1;
+    memcpy(out, p, len);
+    out[len] = '\0';
+}
+
 /* storageForEach has no userdata — accumulate into the file-static `s.recs`. */
 void rebuildCb(const char* key, const char* val) {
     if (s.n >= MON_MAX || !val) return;
@@ -379,19 +441,17 @@ void rebuildCb(const char* key, const char* val) {
     r.t = (uint32_t)strtoul(dot + 1, nullptr, 10);
     if (val[0] == 'r') {
         int rssi, snr, dur, bytes, type = 0, ch = 0, desc = 0, cast = 0;
-        char tg[8] = "";
-        if (sscanf(val + 2, "%d|%d|%d|%d|%d|%d|%d|%d|%7s",
-                   &rssi, &snr, &dur, &bytes, &type, &ch, &desc, &cast, tg) < 4) return;
-        safeStrncpy(r.tag, tg, sizeof r.tag);
+        if (sscanf(val + 2, "%d|%d|%d|%d|%d|%d|%d|%d",
+                   &rssi, &snr, &dur, &bytes, &type, &ch, &desc, &cast) < 4) return;
+        monField(val, 9, r.tag, sizeof r.tag);
         r.dir = 0; r.rssi = rssi; r.dur = (uint32_t)dur; r.bytes = (uint32_t)bytes;
         r.txp = 0; r.type = (uint8_t)type; r.ch = (uint8_t)ch; r.desc = (uint8_t)desc;
         r.cast = (uint8_t)cast;
     } else if (val[0] == 't') {
         int txp, dur, bytes, type = 0, wait = 0, ch = 0, own = 0, desc = 0, cast = 0;
-        char tg[8] = "";
-        if (sscanf(val + 2, "%d|%d|%d|%d|%d|%d|%d|%d|%d|%7s",
-                   &txp, &dur, &bytes, &type, &wait, &ch, &own, &desc, &cast, tg) < 3) return;
-        safeStrncpy(r.tag, tg, sizeof r.tag);
+        if (sscanf(val + 2, "%d|%d|%d|%d|%d|%d|%d|%d|%d",
+                   &txp, &dur, &bytes, &type, &wait, &ch, &own, &desc, &cast) < 3) return;
+        monField(val, 10, r.tag, sizeof r.tag);
         r.dir = 1; r.txp = txp; r.dur = (uint32_t)dur; r.bytes = (uint32_t)bytes;
         r.wait = (uint32_t)wait;
         r.rssi = 0; r.type = (uint8_t)type; r.ch = (uint8_t)ch; r.desc = (uint8_t)desc;
@@ -804,12 +864,71 @@ void drawGraph(uint32_t now) {
             safeStrncpy(s.insTag, hit->tag, sizeof s.insTag);
             loraNameForTag(s.radio, hit->tag, s.insName, sizeof s.insName);
         }
-        char b[96];
+        /* The detail fields are read from the tapped record's own storage node
+         * rather than held for every record: one frame is being read at a time,
+         * and 4096 × two fields is a quarter of a megabyte of PSRAM to carry an
+         * answer nobody asked for. Re-read only when the tap moves. */
+        if (s.detailed && s.insDetT != hit->t) {
+            s.insDetT = hit->t;
+            s.insTo[0] = s.insSubj[0] = s.insHash[0] = '\0';
+            char k[48], v[128];
+            snprintf(k, sizeof k, "lora.%d.packets.%u", s.radio, (unsigned)hit->t);
+            storageGetStr(k, v, sizeof v);
+            if (v[0]) {
+                int base = v[0] == 't' ? 11 : 10;    /* behind the tag's slot */
+                monField(v, base,     s.insTo,   sizeof s.insTo);
+                monField(v, base + 1, s.insSubj, sizeof s.insSubj);
+                monField(v, base + 2, s.insHash, sizeof s.insHash);
+            }
+        }
+        char b[224];
         int o = 0;
         if (name[0]) o += snprintf(b + o, sizeof b - (size_t)o, "%s ", name);
         o += snprintf(b + o, sizeof b - (size_t)o, "%uB", (unsigned)hit->bytes);
         const char* who = s.insName[0] ? s.insName : hit->tag;
-        if (who[0]) snprintf(b + o, sizeof b - (size_t)o, " %s", who);
+        /* Where the packet was going and what it is about, on a second line in
+         * the smaller face: it is a paragraph about one frame, not a label, and
+         * the strip it sits on is a few characters tall. The neighbour moves
+         * down to that line rather than being printed twice — "3f2a11 via tdeck
+         * h2" reads as both ends of the hop, in that order. */
+        bool haveDet = s.detailed && (s.insTo[0] || s.insSubj[0] || s.insHash[0]);
+        /* "<dest> h<n>" as the device wrote it: the name goes between the two
+         * halves, so they are split here rather than printed. */
+        char dest[sizeof s.insTo] = "", hops[8] = "";
+        if (s.insTo[0]) {
+            const char* sp = strchr(s.insTo, ' ');
+            size_t want = sp ? (size_t)(sp - s.insTo) + 1 : sizeof dest;
+            if (want > sizeof dest) want = sizeof dest;
+            safeStrncpy(dest, s.insTo, want);
+            if (sp) safeStrncpy(hops, sp + 1, sizeof hops);
+        }
+        /* "via" only where the hop went somewhere else: on direct traffic the
+         * destination IS the neighbour, and naming it twice says nothing the
+         * second time. The neighbour then stays on the first line. */
+        bool via = haveDet && dest[0] && who[0] && strcmp(dest, hit->tag) != 0;
+        if (who[0] && !via)
+            o += snprintf(b + o, sizeof b - (size_t)o, " %s", who);
+        if (haveDet) {
+            o += snprintf(b + o, sizeof b - (size_t)o, "\n");
+            if (s.insTo[0]) {
+                o += snprintf(b + o, sizeof b - (size_t)o, "%s", dest);
+                if (via) o += snprintf(b + o, sizeof b - (size_t)o, " via %s", who);
+                if (hops[0]) o += snprintf(b + o, sizeof b - (size_t)o, " %s", hops);
+            }
+            /* What it is about, or — where its kind has nothing of its own to
+             * say — what it IS: its own hash, which is the name a proof for it
+             * will carry. The browser draws a line to that proof; this screen
+             * has no room to thread one through a lane seven pixels tall, so
+             * here the two are matched by reading the hash. */
+            if (s.insSubj[0])
+                snprintf(b + o, sizeof b - (size_t)o, "%s%s %s",
+                         s.insTo[0] ? " · " : "", subjWord(hit->desc), s.insSubj);
+            else if (s.insHash[0])
+                snprintf(b + o, sizeof b - (size_t)o, "%shash %s",
+                         s.insTo[0] ? " · " : "", s.insHash);
+        }
+        lv_obj_set_style_text_font(s.insLbl,
+                                   lcdFont(LcdFace::MONO, haveDet ? 6 : 8), 0);
         int laneY = hit->ch == 0 ? s.plotY
                                  : s.plotY + mainH + (hit->ch - 1) * laneH;
         int y = laneY - 10;
@@ -1001,6 +1120,22 @@ void attrEventCb(lv_event_t*) {
     drawAll();
 }
 
+/* The detail toggle is a write to the DEVICE, not a drawing choice: it asks the
+ * recorder to fill two more fields on every record from here on. What is
+ * already in the ring keeps the blanks it was written with — nothing can go
+ * back and read a frame that is long gone — so this shows from the next frame
+ * forward. */
+void detEventCb(lv_event_t*) {
+    s.detailed = !s.detailed;
+    if (s.detMark) {
+        if (s.detailed) lv_obj_remove_flag(s.detMark, LV_OBJ_FLAG_HIDDEN);
+        else            lv_obj_add_flag(s.detMark, LV_OBJ_FLAG_HIDDEN);
+    }
+    storageSet("sys.stats.lcd_details", s.detailed ? 1 : 0);
+    s.insDetT = 0;                     /* re-read the inspected frame's fields */
+    drawAll();
+}
+
 void showPills();
 
 void zoomOut() {
@@ -1128,10 +1263,11 @@ lv_obj_t* mkPill(lv_obj_t* root, const char* label, int idx, int x, int y, int w
  * object is the whole slot, CB_HIT wider than the square it draws, so the box
  * can stay small enough to sit in the pill row without being small enough to
  * miss. */
-lv_obj_t* mkCheck(lv_obj_t* root, int x, int y, int h, lv_event_cb_t cb) {
+lv_obj_t* mkCheck(lv_obj_t* root, int x, int y, int h, int w, const char* caption,
+                  bool on, lv_obj_t** mark, lv_event_cb_t cb) {
     lv_obj_t* slot = lv_obj_create(root);
     lv_obj_remove_style_all(slot);
-    lv_obj_set_size(slot, CB_W, h);
+    lv_obj_set_size(slot, w, h);
     lv_obj_set_pos(slot, x, y);
     lv_obj_add_flag(slot, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(slot, cb, LV_EVENT_CLICKED, nullptr);
@@ -1148,16 +1284,16 @@ lv_obj_t* mkCheck(lv_obj_t* root, int x, int y, int h, lv_event_cb_t cb) {
     lv_obj_set_style_border_color(box, lv_color_hex(0x8A8A8A), 0);
     lv_obj_set_style_radius(box, 2, 0);
 
-    s.attrMark = lv_obj_create(box);
-    lv_obj_remove_style_all(s.attrMark);
-    lv_obj_set_size(s.attrMark, CB_BOX - 6, CB_BOX - 6);
-    lv_obj_center(s.attrMark);
-    lv_obj_set_style_bg_opa(s.attrMark, LV_OPA_COVER, 0);
-    lv_obj_set_style_bg_color(s.attrMark, lv_color_hex(0xC8C8C8), 0);
-    if (!s.attribute) lv_obj_add_flag(s.attrMark, LV_OBJ_FLAG_HIDDEN);
+    *mark = lv_obj_create(box);
+    lv_obj_remove_style_all(*mark);
+    lv_obj_set_size(*mark, CB_BOX - 6, CB_BOX - 6);
+    lv_obj_center(*mark);
+    lv_obj_set_style_bg_opa(*mark, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(*mark, lv_color_hex(0xC8C8C8), 0);
+    if (!on) lv_obj_add_flag(*mark, LV_OBJ_FLAG_HIDDEN);
 
     lv_obj_t* cap = lv_label_create(slot);
-    lv_label_set_text(cap, "attr");
+    lv_label_set_text(cap, caption);
     lv_obj_set_style_text_font(cap, lcdFont(LcdFace::MONO, 8), 0);
     lv_obj_set_style_text_color(cap, lv_color_hex(0xC8C8C8), 0);
     lv_obj_align(cap, LV_ALIGN_LEFT_MID, CB_BOX + 4, 0);
@@ -1238,10 +1374,16 @@ void LoraMonApp::onCreate(lv_obj_t* root) {
      * the axis names went down into the scales they head — so the whole width
      * is the window pills' to divide, less the slot the attribute box takes off
      * the right-hand end. */
-    int pw = (W - CB_W) / NWINS;
+    int pw = (W - CB_W - CB_DET_W) / NWINS;
     for (int i = 0; i < NWINS; i++)
         s.pills[i] = mkPill(root, WINS[i].label, i, i * pw, top + 1, pw, pillEventCb);
-    s.attrBox = mkCheck(root, W - CB_W, top + 1, PILLH - 2, attrEventCb);
+    /* Detail first, then attribute, both at the right-hand end: the deeper
+     * question of the two comes first, and the attribute box keeps the edge it
+     * has always had. */
+    s.detBox = mkCheck(root, W - CB_W - CB_DET_W, top + 1, PILLH - 2, CB_DET_W,
+                       "det", s.detailed, &s.detMark, detEventCb);
+    s.attrBox = mkCheck(root, W - CB_W, top + 1, PILLH - 2, CB_W,
+                        "attr", s.attribute, &s.attrMark, attrEventCb);
     /* ASCII, not LV_SYMBOL_LEFT: the pills are set in the 8 px mono face, which
      * carries no symbol glyphs — the arrow would render as a blank pill. */
     s.back = mkPill(root, "<", 0, 0, top + 1, pw, backEventCb);
@@ -1272,6 +1414,10 @@ void LoraMonApp::onCreate(lv_obj_t* root) {
      * in onClose, which the shell runs for both a recents swipe-up and a
      * memory-pressure eviction. */
     storageSet("sys.stats.lcd_loramon", 1);
+    /* The detail toggle starts off every session, and says so: a session that
+     * ended without running onClose (a crash, a power cut) would otherwise
+     * leave the flag standing behind a box drawn empty. */
+    storageSet("sys.stats.lcd_details", 0);
 
     drawAll();
     timer(tickCb, 1000, this);
@@ -1281,6 +1427,10 @@ void LoraMonApp::onShow() { s.visible = true; drawAll(); }
 void LoraMonApp::onHide() { s.visible = false; }
 void LoraMonApp::onClose() {
     storageSet("sys.stats.lcd_loramon", 0);
+    /* The detail is asked for per session and does not outlive one: a flag left
+     * standing would have the recorder filling fields for a viewer that closed,
+     * at a third more heap per record. */
+    storageSet("sys.stats.lcd_details", 0);
     free(s.buf);
     free(s.recs);
     s = State{};

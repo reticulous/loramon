@@ -7,6 +7,8 @@ app opened (LCD tile / Dock icon)
  ↓
 set sys.stats.{lcd,web}_loramon = 1     → iface-lora starts recording (and web_peers, browser only)
  ↓
+tick `detailed` → {lcd,web}_details = 1  → each record grows `to` and `subj`, from here on
+ ↓
 read lora.<n>.packets.<ms> subtree      → one record per on-air frame + one per dwell
  ↓  LCD: storageForEach on a 1 s tick   browser: mirrored subtree, rebuilt at 1 Hz
 build the view for the selected window  → LAG_MS behind "now", so nothing is redrawn twice
@@ -14,18 +16,27 @@ build the view for the selected window  → LAG_MS behind "now", so nothing is r
 touch/drag → zoom stack; tap → inspect one frame
  ↓
 app closed → set the watch keys to 0    → iface-lora drops the whole packets subtree
+ ↑  or, for the browser window, the link dropping: the web keys count only
+    while `webrtc.up` is 1, so a tab that vanished stops the recording it started
 ```
 
 Three rules the ladder rests on:
 
-- **The device records only while an app here says it is looking.** The watch
-  keys are the whole contract in that direction, and the falling edge deletes
-  the subtree — so there is never pre-open history and every graph fills from
-  open forward.
+- **The device records only while an app here says it is looking** — and, for
+  the browser, only while it is still reachable. The watch keys are the whole
+  contract in that direction, and the falling edge deletes the subtree, so there
+  is never pre-open history and every graph fills from open forward. A tab can
+  only lower its own key while it is still there, so iface-lora reads the web
+  keys against `webrtc.up`: a crash, a slept phone or a dropped WiFi ends the
+  recording as surely as closing the window does, and a reconnect restarts it
+  without the tab having to ask.
 - **Storage is the model.** Neither viewer holds a record the device did not
   publish, and neither asks the device a question: no ITS port, no request/reply.
   Expiry reaches the browser because `storageDeleteTree` emits an explicit
-  delete op.
+  delete op — while a browser is there to receive it. One made while the link
+  was down reaches nobody, and a dump is applied as a merge, so the panel
+  declares the packet and peer subtrees snapshot-authoritative: they are dropped
+  when a dump begins and refilled by the dump itself.
 - **The two apps implement one model.** Same records, same axes, same colour
   scheme, same zoom semantics. Where they differ it is stated below, and it is
   always about the surface — repaint cadence, label budget, stack depth — never
@@ -243,8 +254,12 @@ radio does would make "open the monitor" an action with side effects on the air.
   clear, and the shell runs it for both a recents swipe-up and a memory-pressure
   eviction, so there is no path out that skips it. The browser writes it from the
   window's visibility watcher and from `onUnmounted` — there closing the window
-  *is* the stop. A key left at 1 leaves the device recording — holding a 1 Hz
-  RSSI beat and growing the subtree toward `LORA_MON_CAP` — for nobody.
+  *is* the stop. A key left at 1 would leave the device recording — holding a
+  1 Hz RSSI beat and growing the subtree toward `LORA_MON_CAP` — for nobody,
+  which is what the `webrtc.up` gate on the web keys catches: the one way out a
+  tab cannot write its way through is the one where the tab is already gone.
+  The LCD key has no such gate and needs none; `onClose` is local and always
+  runs.
 - **One graph where the operator set a nine-channel regime is not this
   straddle's bug.** Both surfaces count lanes from `lora.<n>.chans`, and
   iface-lora publishes the agile set only while SUPE is *running* — not while
@@ -260,10 +275,69 @@ radio does would make "open the monitor" an action with side effects on the air.
   a reader that does not exist.
 - **Records are keyed by device uptime, and uptime restarts.** The browser
   anchors "now" to the newest record it has seen and never pulls that anchor
-  backward, so a device reboot leaves the graph frozen at the old anchor until
-  the new records overtake it. That is the deliberate choice — a monotonic
-  anchor cannot be dragged backward by one late arrival — and the cost is a
-  stale-looking window across a reboot, not a wrong one.
+  backward *within a session*: a monotonic anchor cannot be dragged backward by
+  one late arrival, and one that could would jerk the bars on every jittery
+  beat. What ends a session is what re-anchors. A reboot costs the link, so the
+  reconnect's completed dump (`device.syncEpoch`) is the signal, and
+  `resetSession()` drops the anchor with the rest of the session's state — the
+  first record of the new boot then sets the clock. `restarted()` is the
+  backstop for a restart that somehow does not cost the link: a record more than
+  the one-hour window behind the extrapolation cannot be transport jitter,
+  because the recorder expires its own nodes at an hour.
+- **A name on the graph is the defining protocol's own word.** RNS's all-caps
+  constants verbatim (`PATH_RESPONSE`, `LRPROOF`, `RESOURCE_HMU`), our own
+  frames under a `SUPE_` prefix, and lower case for the two that are neither —
+  `split` and `RNode` are facts about this interface's framing, not packets any
+  protocol defines. The point is that a bar, a Reticulum log line and the source
+  can be read against each other without a translation step. The codes behind
+  the names are wire and append-only; each viewer holds its own table, so
+  adding one means adding it here, in `loramon_lcd.cpp`, and in `lora_mon.h`'s
+  enum — three tables, one order.
+- **A proof is drawn to what it proves, not described.** A proof names the first
+  bytes of the hash of the packet it answers; every other record carries the
+  same bytes as its own `hash`. `rebuild()` joins them into `proofLinks` — with
+  the records, not per redraw, since the answer changes only when they do — and
+  the plot threads a thin yellow dotted line between the two bars, drawn over
+  the traffic and in neither bar's colour, because a join is a third kind of
+  statement and not a fourth kind of frame. Where the line is drawn the readout
+  stops spelling the hash out: it would be the same answer twice, in the half
+  nobody reads. Where the packet is off screen there is no line and the hash is
+  all there is, so it stays. Only within a lane, and only with the detail
+  recorded. **The LCD shows the hash instead of a line** — a lane seven pixels
+  tall has nowhere to thread one, and the records it holds for a redraw are
+  4096 to the browser's mirror.
+- **The detail fields are read, not inferred, and the viewer supplies the
+  words.** The device sends `to` (a destination and a hop count) and `subj` (a
+  value whose meaning is given by the record's `desc`); the table that turns
+  `subj` into "asks 9f21ab" or "proves 71c0de" lives in each viewer beside its
+  name table, for the same reason the names do. Nothing here decodes a payload:
+  what is shown is the cleartext header, and the payloads of the packets that
+  carry no encryption at all. The LCD keeps them only for the frame being
+  inspected — 4096 records × two fields is a quarter of a megabyte of PSRAM to
+  hold an answer nobody asked for — and re-reads that one record's node when the
+  tap moves.
+- **A reconnect is a new session, and nothing from the old one survives it.**
+  Three things in the browser half outlive a dropped link on their own and are
+  wrong the moment it comes back: the mirror's copy of everything iface-lora
+  publishes only while a viewer is open, the timebase (`devNow()` extrapolates
+  from wall-clock and marches on through an outage of any length), and a frozen
+  zoom span, which is quoted in a clock that may no longer exist.
+
+  All four published roots are declared snapshot-authoritative in `onMounted`,
+  and **`lora.<n>.rssi` is the one that has to be** — not `packets`, which is
+  only untidy. A dump merges, so a device reset leaves the mirror holding the
+  last boot's sample; `pollFloor()` reads it before any fresh one arrives and
+  takes the timebase from its leading timestamp, because on a quiet channel the
+  sample beat is the only publisher and must be able to establish the clock.
+  Anchored to a boot that has ended, every record of the new one lands an hour
+  or more "in the past" and the graph draws nothing — and `restarted()` cannot
+  rescue it, since a device reset usually follows an uptime far shorter than the
+  hour that test needs. Reloading the page was the only cure, because only that
+  empties the mirror. `resetSession()`
+  drops all of it on `device.syncEpoch`, and is the same reset the radio tabs
+  use — a tab change ends a session for exactly the same reason. The window and
+  `attribute` pills survive both: those are the reader's choices, not the
+  session's.
 - **A tap is not a zoom.** A release under 1 % of the visible span (under 5 ms
   either way in the browser) is discarded, or every stray touch freezes the
   graph on a span nobody can read.

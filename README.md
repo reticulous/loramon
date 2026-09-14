@@ -15,6 +15,9 @@ background it (another app, Home)     → the session continues; recording does 
  ↓
 stop it (recents swipe-up, or close
 the browser window)                   → the device stops recording and drops the subtree
+ ↑  for the browser window, losing the link counts as stopping it: a tab that
+    crashed or slept cannot say it has gone, so the device watches the link
+    instead. Reconnecting starts a fresh session, graph empty again.
 ```
 
 Three things that follow from the ladder, and surprise people otherwise:
@@ -32,8 +35,11 @@ Three things that follow from the ladder, and surprise people otherwise:
   back must not cost the history you were watching accumulate, so the command key is
   written from `onCreate`/`onClose` rather than `onShow`/`onHide`. What ends a
   session on the device is a recents swipe-up (or a memory-pressure eviction,
-  which runs the same `onClose`), and in the browser closing the window. Nothing
-  accumulates between sessions.
+  which runs the same `onClose`), and in the browser closing the window — or the
+  link to it going down, which the device treats the same way, since a tab that
+  crashed or whose WiFi went is in no position to say it has gone. Nothing
+  accumulates between sessions, and a reconnect is a new session: the graph
+  starts empty again rather than resuming an hour nobody was watching.
 - **A backgrounded session keeps costing.** Left in recents with the screen off,
   it holds the 1 Hz sample and the 1 Hz interface beat against light sleep —
   around 0.2–0.5 mA on top of the radio's own standing RX draw, so a few percent
@@ -82,7 +88,7 @@ and the settings pane and status bar keep everything they read.
 
 ## Storage variables
 
-This straddle owns no settings and publishes no telemetry. It writes three
+This straddle owns no settings and publishes no telemetry. It writes five
 command keys, all of them "a viewer is looking":
 
 | Key | Written by | Meaning |
@@ -90,6 +96,13 @@ command keys, all of them "a viewer is looking":
 | `sys.stats.lcd_loramon` | the LCD app, from `onCreate`/`onClose` | `1` while the on-device app is running — foreground or background, until it is stopped or evicted |
 | `sys.stats.web_loramon` | the browser window, while visible | `1` while the browser window is up |
 | `sys.stats.web_peers` | the browser window, while visible | `1` while a reader wants `lora.<n>.peers.<slot>` — the browser only; the LCD app asks the peer table directly |
+| `sys.stats.web_details` | the browser window, from the `detailed` box | `1` while a reader wants each record's two extra fields |
+| `sys.stats.lcd_details` | the LCD app, from its `det` box | the same, for the on-device viewer |
+
+Both web keys count only while `webrtc.up` is `1`. A tab can lower its own key
+only while it is still there, so iface-lora reads them against the link: setting
+one by hand on a node with no browser session records nothing, and
+`sys.stats.lcd_loramon` is the key to set from the CLI.
 
 Everything the two apps read is published by iface-lora under `lora.<n>.*`.
 
@@ -100,10 +113,46 @@ radio on a multi-radio board; the pill row picks the window. Touch a frame to
 have it named along the top of the plot; drag across the plot to zoom, and the
 back pill pops one level. `attr` at the right-hand end of the pill row turns the
 peer labels off, for when the traffic is dense enough that they are in the way.
+`det` beside it is the detail (below); the frame readout grows a second line in
+a smaller face to hold it.
 
 **In the browser**, the same view is a Dock app. Hover reads a frame out;
 drag-select zooms. The window has to be front-most before the plot takes a
 press, so reaching for an occluded LoRaMon costs you a raise and not a zoom.
+
+## Detail
+
+A frame is named by what the protocol that defined it calls it — Reticulum's
+own all-caps constants, this network's own frames under a `SUPE_` prefix — so
+`PATH_REQUEST`, `LRPROOF` and `RESOURCE_ADV` read on the graph exactly as they
+read in a Reticulum log. That naming is always on and costs nothing: it is the
+packet's header, which flies in the clear.
+
+**`detailed`** (`det` on the LCD) asks for two fields more, and is off by
+default because it is a standing cost on the *device*: a deeper read of every
+frame as it lands, and about a third more heap per record for as long as the
+ring holds it. With it on, a frame reads out as
+
+```
+PATH_REQUEST · 41B
+3f2a11 via tdeck h2 · asks 9f21ab
+```
+
+— where the packet was going and the neighbour this hop was with, then what the
+packet is *about*, which depends on what it is: the address a path request asks
+for, the packet hash a proof proves, the link id a link request creates, the
+aspect an announce serves, the far end of an established link. The neighbour is
+only named where the hop went somewhere else; on direct traffic the destination
+*is* the neighbour and the `via` is left off. Everything shown is cleartext.
+
+Detail also draws **a thin yellow dotted line from a proof to the packet it
+proves** — both carry the same hash, so the pair can be found — and then says
+nothing further about it, since the line is the answer. The on-device viewer
+prints the hash instead: there is no room to thread a line through a lane seven
+pixels tall. What a packet *carries* is encrypted, and no toggle here changes
+that. Turning it on fills forward — what is already in the ring keeps the blanks
+it was recorded with, because nothing can go back and read a frame that has
+already flown.
 
 ## Dependencies
 

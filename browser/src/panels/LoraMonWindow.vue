@@ -39,10 +39,18 @@
             / <span class="c-bad">CRC</span>
           </span>
           <!-- Attribution is the one layer drawn OVER the traffic rather than
-               beside it, so it is also the one worth being able to take off:
+               beside it, so it is the one the plot leaves off until asked:
                on a busy lane the names cover the frames they name. Beside the
                rx gutter, at the far end of the row, because it acts on the
                whole plot rather than on the window or the zoom. -->
+          <!-- Detail is asked of the DEVICE, not of the drawing: it makes every
+               record carry two more fields, so it costs heap on the node for as
+               long as the ring holds them. Left of attribute because it is the
+               deeper question of the two — what a frame is about, rather than
+               what to write over it. -->
+          <label class="lm-attr" title="record what each frame is about: its destination, and the address it names">
+            <input type="checkbox" v-model="detailed"> detailed
+          </label>
           <label class="lm-attr" title="name the peer each frame was with, and whose slot each listening window is">
             <input type="checkbox" v-model="attribute"> attribute
           </label>
@@ -127,6 +135,11 @@ const C_RX_US    = '#2060C0'   // theirs, to us
 const C_RX_OTHER = '#8A8A8A'   // theirs, to someone else — overheard
 const C_BAD      = '#8050C8'   // failed its CRC: air held, nothing decoded
 
+/* The thread from a proof to the packet it answers. Yellow because it belongs
+ * to neither bar's colour — direction and audience are spoken for, and a join
+ * is a third kind of statement about the traffic, not a fourth kind of frame. */
+const C_PROOF = 'rgba(240,214,60,0.85)'
+
 /* The politeness marks — what the frame waited before it went out. Near-white
  * and thin: they are annotation on a bar, not a quantity to compare against
  * one, and over short bursts anything stronger dominates the airtime it is
@@ -188,7 +201,7 @@ const C_BEZEL = 'rgba(255,255,255,0.30)'
 const C_PILL_BG = '#ffffcc'
 const C_PILL_FG = '#000000'
 
-interface Rec { t: number; dir: number; dur: number; bytes: number; rssi: number; snr10: number; txp: number; type: number; wait: number; own: number; ch: number; desc: number; cast: number; tag: string }
+interface Rec { t: number; dir: number; dur: number; bytes: number; rssi: number; snr10: number; txp: number; type: number; wait: number; own: number; ch: number; desc: number; cast: number; tag: string; to: string; subj: string; hash: string }
 
 /* How far two dwell records may sit apart and still be one stay on a channel.
  * The device already merges a stay into one record and breaks it on every
@@ -200,6 +213,12 @@ const SLOT_JOIN_MS = 20
 /* Who a frame was aimed at, as the device decided it — the browser cannot, since
  * it turns on which addresses mean US and that lives in the peer table. */
 const CAST_BCAST = 0, CAST_US = 1, CAST_OTHER = 2, CAST_US_LINK = 3
+
+/* A proof of something, in any of the shapes Reticulum proves in — a packet, a
+ * link request, a packet inside a link, a resource. All four are addressed to
+ * the hash of what they prove rather than to a node, which is the property this
+ * viewer turns on when it looks for the frame a proof answers. */
+const isProof = (d: number) => d === 11 || d === 18 || d === 19 || d === 20
 /* Ours either way — the split is about whether the far end is nameable at all. */
 const isOurs = (c: number) => c === CAST_US || c === CAST_US_LINK
 
@@ -217,15 +236,65 @@ function colourOf(rec: Rec): string {
  * names live here rather than on the wire because every frame is a storage node
  * and there may be thousands: the device sends a byte, each viewer holds its
  * own table. Codes are appended to, never renumbered. */
+/* A packet is named the way the protocol that defined it names it, so that what
+ * the graph says and what a Reticulum log, a packet dump or the source say are
+ * the same word: RNS's own all-caps constants verbatim, and our own protocol's
+ * frames under a SUPE_ prefix so the two vocabularies never collide. `split`
+ * and `RNode` are neither — they are facts about this interface's framing, and
+ * stay lower case to say so. */
 const DESC = [
-  '', 'HAIL', 'ANNOUNCE', 'GOT', 'READY', 'END', 'BYE', 'RESEND',
-  'data', 'announce', 'link request', 'proof', 'split', 'RNode',
+  '', 'SUPE_HAIL', 'SUPE_ANNOUNCE', 'SUPE_GOT', 'SUPE_READY', 'SUPE_END',
+  'SUPE_BYE', 'SUPE_RESEND',
+  'DATA', 'ANNOUNCE', 'LINKREQUEST', 'PROOF', 'split', 'RNode',
+  /* 14 — the Reticulum header read out past its packet-type bits: the context
+   * byte says what a packet is FOR, and the destination type what it is for it
+   * to be. Without them a path request is DATA and the announce answering one
+   * is an ordinary ANNOUNCE, which is the pair that reads most wrongly. */
+  'PATH_REQUEST', 'PATH_RESPONSE', 'TUNNEL_SYNTHESIZE', 'PLAIN',
+  'LRPROOF', 'LINKPROOF', 'RESOURCE_PRF', 'GROUP', 'LINK',
+  'RESOURCE', 'RESOURCE_ADV', 'RESOURCE_REQ', 'RESOURCE_HMU',
+  'RESOURCE_ICL', 'RESOURCE_RCL', 'CACHE_REQUEST',
+  'REQUEST', 'RESPONSE', 'COMMAND', 'COMMAND_STATUS', 'CHANNEL',
+  'KEEPALIVE', 'LINKIDENTIFY', 'LINKCLOSE', 'LRRTT',
 ] as const
 const descOf = (d: number) => DESC[d] ?? ''
+
+/* How to read a record's two detail fields, by what the frame is. The device
+ * sends the values and nothing else — the words belong here, with the rest of
+ * this viewer's vocabulary, for the same reason the descriptions do: there may
+ * be thousands of records and every character rides in each of them.
+ *
+ * `to` always means the same thing (where the packet is going, and how far it
+ * has come), so only the subject needs a table. An entry missing from it is a
+ * packet whose own hash is the most useful thing to say about it — which is
+ * what a proof for it will name. */
+const SUBJ: Record<number, string> = {
+  1: 'from', 2: 'from', 3: 'from', 4: 'from',   /* SUPE names its own sender */
+  5: 'from', 6: 'from', 7: 'from',
+  14: 'asks',        /* path request — the address being looked for */
+  29: 'wants',       /* cache request — the packet it is asking for */
+  15: 'serves',      /* path reply — the aspect behind the announced name */
+  9:  'serves',      /* announce — the same */
+  10: 'link',        /* link request — the id every later packet uses */
+  11: 'proves',      /* proof — the hash of the packet it answers */
+  18: 'proves', 19: 'proves', 20: 'proves',
+  16: 'says', 17: 'says',   /* cleartext payload, quoted as far as it is printable */
+  22: 'with', 23: 'with', 24: 'with', 25: 'with', 26: 'with', 27: 'with',
+  28: 'with', 30: 'with', 31: 'with', 32: 'with', 33: 'with', 34: 'with',
+  35: 'with', 36: 'with', 37: 'with', 38: 'with',   /* the link's far end */
+}
+const subjWord = (d: number) => SUBJ[d] ?? 'hash'
 
 /* recs = the active radio's packets, rebuilt each tick from the mirrored
  * `lora.<n>.packets` subtree (the firmware adds/deletes those nodes). */
 let recs: Rec[] = []
+
+/* Each proof, against the packet it proves — joined on the hash a proof names
+ * and every other record carries. Built with the records rather than per
+ * redraw: the answer changes only when they do, and the draw runs on animation
+ * frames. Empty unless the detail is being recorded, which is where the hashes
+ * come from. */
+let proofLinks = new Map<Rec, Rec>()
 
 /* Channel RSSI, accumulated live rather than mirrored as history: the firmware
  * publishes only the newest reading (`lora.<n>.rssi` = "<ms>|<ch0>|<ch1>|…"),
@@ -268,10 +337,19 @@ const winKey = ref<string>('1m')
 const air = ref<{ tx: string; busy: string }>({ tx: '0%', busy: '0%' })
 
 /* Whether the peer pills are drawn: who each frame was with, and whose slot a
- * listening window on a detour lane belongs to. On by default — the whole point
- * of the lane is who is on it — but it is the one layer that sits over the
- * traffic, so on a busy view it can be taken off to see the shape underneath. */
-const attribute = ref(true)
+ * listening window on a detour lane belongs to. Off by default — it is the one
+ * layer that sits over the traffic rather than beside it, so the plot opens
+ * showing the shape of the traffic and the names go on when they are wanted. */
+const attribute = ref(false)
+
+/* Whether the device fills each record's two detail fields. Off by default, and
+ * off is the honest default: it is a standing cost on the node — a deeper read
+ * of every frame as it lands, and ~34 bytes in every record node for as long as
+ * the ring holds it, which at the cap is a third again on top of half a
+ * megabyte. Turning it on fills forward; the records already in the ring keep
+ * the blanks they were written with, because nothing can go back and read a
+ * frame that is long gone. */
+const detailed = ref(false)
 
 /* Zoom stack: each entry is an absolute [t0,t1] device-time span. Empty = the
  * live moving window chosen by the pills. Selecting inside a zoomed view pushes
@@ -426,6 +504,25 @@ function drawBands(ctx: CanvasRenderingContext2D, w: number, h: number, dpr: num
 
 const clamp01 = (x: number) => Math.max(0, Math.min(1, x))
 
+/* Where a frame's bar sits in its lane and how thick it is — its level on the
+ * lane's dBm axis, clamped so a bar at either rail is still drawn whole. Shared
+ * by the bar itself, by the hover pill that has to sit above it, and by the
+ * proof line that has to meet it: three things that must agree to the pixel,
+ * and did not while each worked it out for itself.
+ *
+ * Never thinner than two device-independent pixels: on an agile lane at a
+ * quarter height the proportional term falls under one pixel, and a frame that
+ * rounds away is a frame the graph is lying about. */
+function barLevel(rec: Rec, h: number, dpr: number): { y: number; th: number } {
+  const th = Math.max(2 * dpr, h * 0.05)
+  const ax = rec.dir === 1 ? AX_TX : AX_RX
+  const dbm = rec.dir === 1 ? rec.txp : rec.rssi
+  let y = h - clamp01((dbm - ax.lo) / (ax.hi - ax.lo)) * h
+  if (y > h - th) y = h - th
+  if (y < 0) y = 0
+  return { y, th }
+}
+
 /* The lane's own outline. A lane the radio never visited is veiled end to end
  * and has no traffic to give it shape, so without this it is a rectangle of dark
  * against a dark window — indistinguishable from the gap between two lanes, and
@@ -547,15 +644,7 @@ function drawOne(cv: HTMLCanvasElement | null, ch: number, main: boolean) {
     if (e < lo || s > hi) continue
     const xs = xAt(s)
     const bw = Math.max(1, xAt(e) - xs)
-    /* Never thinner than two device-independent pixels. On an agile lane at a
-     * quarter height the proportional term falls under one pixel, and a frame
-     * that rounds away is a frame the graph is lying about. */
-    const th = Math.max(2 * dpr, h * 0.05)
-    const ax = rec.dir === 1 ? AX_TX : AX_RX
-    const dbm = rec.dir === 1 ? rec.txp : rec.rssi
-    let y = h - clamp01((dbm - ax.lo) / (ax.hi - ax.lo)) * h
-    if (y > h - th) y = h - th
-    if (y < 0) y = 0
+    const { y, th } = barLevel(rec, h, dpr)
     const col = colourOf(rec)
     /* What the frame waited before its first bit went on air, drawn as two
      * runs because they are two different facts. Both sit at mid-height in the
@@ -589,6 +678,42 @@ function drawOne(cv: HTMLCanvasElement | null, ch: number, main: boolean) {
     drawWait(s - rec.wait, s, false)                       /* the channel's, solid */
     ctx.fillStyle = col
     ctx.fillRect(xs, y, bw, th)
+  }
+
+  /* A proof, joined to the packet it answers.
+   *
+   * A proof is addressed to the hash of what it proves and names it in its
+   * payload; every other record carries its own hash. So the pair can be found,
+   * and once it is drawn there is nothing left for the readout to say about it
+   * — a line between two bars is the answer, and a hex prefix repeated twice is
+   * the same answer spelt out. Thin, dotted and yellow: it belongs to neither
+   * bar's colour, and it must not compete with the traffic it is annotating.
+   *
+   * Only within a lane: the join is between two frames on one channel, and a
+   * line leaving the plot would have nowhere to land. Nothing is drawn without
+   * the detail recorded — there are no hashes to join then. */
+  if (proofLinks.size) {
+    ctx.save()
+    ctx.strokeStyle = C_PROOF
+    ctx.lineWidth = Math.max(1, dpr * 0.75)
+    ctx.setLineDash([2 * dpr, 3 * dpr])
+    /* Bar mid-height, mid-length: the thread meets each bar where the bar
+     * plainly is, rather than at an end that moves with the zoom. */
+    const meet = (rec: Rec) => {
+      const { y, th } = barLevel(rec, h, dpr)
+      return { x: xAt(rec.t + rec.dur / 2), y: y + th / 2 }
+    }
+    for (const rec of recsCh) {
+      const src = proofLinks.get(rec)
+      if (!src || src.ch !== rec.ch) continue
+      const a = meet(rec), b = meet(src)
+      if (Math.max(a.x, b.x) < 0 || Math.min(a.x, b.x) > w) continue   /* off screen */
+      ctx.beginPath()
+      ctx.moveTo(a.x, a.y)
+      ctx.lineTo(b.x, b.y)
+      ctx.stroke()
+    }
+    ctx.restore()
   }
 
   /* The noise floor's figure, held back from its line so it lands in the pill
@@ -743,13 +868,37 @@ function drawOne(cv: HTMLCanvasElement | null, ch: number, main: boolean) {
        * room for the cast as well, which is what turns the one unresolvable
        * address there is a reason for into `inbound link`. */
       const who = peerLabel(hit.tag, hit.cast)
-      const label = [name, `${hit.bytes}B`, who].filter(Boolean).join(' · ')
+      /* With the detail recorded, a second line carries the journey and the
+       * subject: where the packet was going, the neighbour this hop was with,
+       * and whatever this kind of packet is about. The neighbour moves down to
+       * that line rather than being printed twice — "3f2a11 via tdeck h2" says
+       * both ends of the hop in the order a person reads them. */
+      const detail: string[] = []
+      /* "via" only where the hop went somewhere else: on direct traffic the
+       * destination IS the neighbour, and "164f61 via 164f61" is one fact
+       * stated twice. Compared against the tag rather than against the name,
+       * since the name is only what the tag resolved to. The neighbour then
+       * stays on the first line, where it would have been anyway — it moves
+       * down only when it is the middle of a journey. */
+      const [dest, hops] = hit.to ? hit.to.split(' ') : ['', '']
+      const via = hit.to && who && dest !== hit.tag
+      if (hit.to) detail.push(`${dest}${via ? ` via ${who}` : ''}${hops ? ` ${hops}` : ''}`)
+      /* What a proof proves is said by the line drawn to it. Spelling the hash
+       * out as well is the same answer twice, and the hex is the half nobody
+       * reads. Where the packet it answers is not on screen there is no line,
+       * and the hash is all there is to go on. */
+      if (hit.subj && !proofLinks.has(hit)) detail.push(`${subjWord(hit.desc)} ${hit.subj}`)
+      /* A frame with nothing else to say says what it is: its own hash, which
+       * is the name a proof for it carries — the way to find its answer when
+       * that answer is off screen and no line was drawn. */
+      else if (!hit.subj && hit.hash) detail.push(`hash ${hit.hash}`)
+      const lines = [[name, `${hit.bytes}B`, via ? '' : who].filter(Boolean).join(' · ')]
+      if (detail.length) lines.push(detail.join(' · '))
       ctx.font = `${10 * dpr}px 'SF Mono','Menlo','Consolas',monospace`
-      const tw = ctx.measureText(label).width
-      const pad = 4 * dpr, ph = 14 * dpr
-      const ax = hit.dir === 1 ? AX_TX : AX_RX
-      const dbm = hit.dir === 1 ? hit.txp : hit.rssi
-      let y = h - clamp01((dbm - ax.lo) / (ax.hi - ax.lo)) * h
+      let tw = 0
+      for (const l of lines) tw = Math.max(tw, ctx.measureText(l).width)
+      const pad = 4 * dpr, lh = 14 * dpr, ph = lh * lines.length
+      const { y } = barLevel(hit, h, dpr)
       /* Above the bar where there is room, below it where there is not. */
       let py = y - ph - 2 * dpr
       if (py < 0) py = Math.min(h - ph, y + 3 * dpr)
@@ -759,7 +908,7 @@ function drawOne(cv: HTMLCanvasElement | null, ch: number, main: boolean) {
       ctx.fillRect(px, py, tw + pad * 2, ph)
       ctx.fillStyle = '#e8e8e8'
       ctx.textBaseline = 'middle'
-      ctx.fillText(label, px + pad, py + ph / 2)
+      lines.forEach((l, i) => ctx.fillText(l, px + pad, py + lh * i + lh / 2))
     }
   }
 
@@ -947,15 +1096,17 @@ function noiseFloor(ch: number): number | null {
 /* ── rebuild recs from the mirrored subtree ── */
 function parseRec(t: number, s: string): Rec | null {
   const p = s.split('|')
-  if (p[0] === 'r') return { t, dir: 0, rssi: +p[1], snr10: +p[2], dur: +p[3], bytes: +p[4], txp: 0, type: +(p[5] ?? 0), wait: 0, own: 0, ch: +(p[6] ?? 0), desc: +(p[7] ?? 0), cast: +(p[8] ?? 0), tag: p[9] ?? '' }
-  if (p[0] === 't') return { t, dir: 1, txp: +p[1], dur: +p[2], bytes: +p[3], rssi: 0, snr10: 0, type: +(p[4] ?? 0), wait: +(p[5] ?? 0), ch: +(p[6] ?? 0), own: +(p[7] ?? 0), desc: +(p[8] ?? 0), cast: +(p[9] ?? 0), tag: p[10] ?? '' }
+  /* The two detail fields ride behind the tag and only while a viewer asked for
+   * them, so a record written with the toggle off simply ends sooner. */
+  if (p[0] === 'r') return { t, dir: 0, rssi: +p[1], snr10: +p[2], dur: +p[3], bytes: +p[4], txp: 0, type: +(p[5] ?? 0), wait: 0, own: 0, ch: +(p[6] ?? 0), desc: +(p[7] ?? 0), cast: +(p[8] ?? 0), tag: p[9] ?? '', to: p[10] ?? '', subj: p[11] ?? '', hash: p[12] ?? '' }
+  if (p[0] === 't') return { t, dir: 1, txp: +p[1], dur: +p[2], bytes: +p[3], rssi: 0, snr10: 0, type: +(p[4] ?? 0), wait: +(p[5] ?? 0), ch: +(p[6] ?? 0), own: +(p[7] ?? 0), desc: +(p[8] ?? 0), cast: +(p[9] ?? 0), tag: p[10] ?? '', to: p[11] ?? '', subj: p[12] ?? '', hash: p[13] ?? '' }
   /* A dwell: the radio was tuned here and listening for this long. Not a frame
    * — it carries no level and is never drawn as one; it is what tells a lane
    * apart from a lane nobody was watching. Its tag, where it has one, is the
    * meeting whose slot the stay is: the slot belongs to that peer for its whole
    * width, and on a detour channel it is the ONLY thing that says so, since a
    * slot may pass with nothing arriving in it. */
-  if (p[0] === 'a') return { t, dir: 2, ch: +p[1], dur: +p[2], bytes: 0, rssi: 0, snr10: 0, txp: 0, type: 0, wait: 0, own: 0, desc: 0, cast: 0, tag: p[3] ?? '' }
+  if (p[0] === 'a') return { t, dir: 2, ch: +p[1], dur: +p[2], bytes: 0, rssi: 0, snr10: 0, txp: 0, type: 0, wait: 0, own: 0, desc: 0, cast: 0, tag: p[3] ?? '', to: '', subj: '', hash: '' }
   return null
 }
 
@@ -1018,6 +1169,19 @@ function rebuild() {
   }
   arr.sort((a, b) => a.t - b.t)
   recs = arr
+
+  /* A proof names the first bytes of the hash of the packet it answers, and
+   * that packet carries the same bytes as its own. Newest wins where two
+   * records share a prefix — three bytes is a wide enough net for a window of
+   * traffic, and the near one is the likelier answer. */
+  const byHash = new Map<string, Rec>()
+  for (const rec of arr) if (rec.hash) byHash.set(rec.hash, rec)
+  proofLinks = new Map<Rec, Rec>()
+  for (const rec of arr) {
+    if (!isProof(rec.desc) || !rec.subj) continue
+    const src = byHash.get(rec.subj)
+    if (src) proofLinks.set(rec, src)
+  }
   if (restarted(seen)) { reanchor(seen); return }
   /* Anchor device-now monotonically within the boot: never pull it backward
    * (that snap caused the new-bar jerk) — advance to the newest packet or the
@@ -1142,6 +1306,7 @@ function tick() {
     /* The neighbourhood is a separate appetite from the frames, and the device
      * only publishes it while something says it is reading — so say so. */
     device.set('sys.stats.web_peers', 1)
+    device.set('sys.stats.web_details', detailed.value ? 1 : 0)
   }
   pollChans()
   pollFloor()
@@ -1165,6 +1330,35 @@ function frame(ts: number) {
 }
 
 onMounted(() => {
+  /* Everything the recorder publishes only WHILE A VIEWER IS OPEN belongs to
+   * one session, and a dump merges — it re-states what exists and cannot
+   * retract what doesn't — so without this a reconnect leaves the mirror
+   * holding the last session's values for as long as the tab lives. Declared
+   * snapshot-authoritative, each is dropped when a dump starts and refilled by
+   * the dump itself. Every radio, not just the tab on screen: the mirror
+   * carries all of them whichever one is being read.
+   *
+   * `packets` and `peers` are series whose keys come AND GO — a frame node is
+   * deleted when it ages past the hour, a peer row when its slot empties — so
+   * they would otherwise accumulate records the device has long forgotten.
+   *
+   * `rssi` is one key, always overwritten, and is the load-bearing one: it
+   * carries the device's clock in its first field, and pollFloor() takes the
+   * timebase from it when there is none yet — which is right on a quiet channel
+   * where the sample beat is the only publisher, and fatal if the sample is
+   * from a boot that has ended. A device reset with the window open left the
+   * viewer anchored to the dead boot's uptime and every new record an hour in
+   * the past, drawing nothing until the page was reloaded.
+   *
+   * The narrowest roots that cover it. `lora.<n>` above them would drop the
+   * radio's state and channel list too, which every other surface in the SPA
+   * reads and which nothing here needs dropped. */
+  for (let n = 0; n < MAX_RADIOS; n++) {
+    device.snapshotTree(`lora.${n}.packets`)
+    device.snapshotTree(`lora.${n}.peers`)
+    device.snapshotTree(`lora.${n}.rssi`)
+    device.snapshotTree(`lora.${n}.air1h`)
+  }
   if (radios.value.length && !radios.value.includes(activeRadio.value))
     activeRadio.value = radios.value[0]
   device.set('sys.stats.web_loramon', 1)   // start recording before the first tick
@@ -1179,12 +1373,21 @@ onUnmounted(() => {
   if (copyTimer) { clearTimeout(copyTimer); copyTimer = null }
   device.set('sys.stats.web_loramon', 0)
   device.set('sys.stats.web_peers', 0)
+  device.set('sys.stats.web_details', 0)
 })
 
 watch(() => props.visible, v => {
   device.set('sys.stats.web_loramon', v ? 1 : 0)
   device.set('sys.stats.web_peers', v ? 1 : 0)
+  device.set('sys.stats.web_details', v && detailed.value ? 1 : 0)
   if (v) { tick(); nextTick(redraw) }
+})
+
+/* The detail is asked of the device, so the toggle is a write and not a
+ * repaint: what is already recorded keeps whatever it was written with, and the
+ * change shows from the next frame on. */
+watch(detailed, v => {
+  device.set('sys.stats.web_details', props.visible && v ? 1 : 0)
 })
 
 watch(winKey, () => { tick(); if (props.visible) nextTick(redraw) })
@@ -1192,15 +1395,48 @@ watch(winKey, () => { tick(); if (props.visible) nextTick(redraw) })
 /* A layer coming off is not new data — repaint, don't refetch. */
 watch(attribute, () => { if (props.visible) redraw() })
 
-watch(activeRadio, () => {
-  devClock = 0; devClockAt = 0; recs = []
+/* Everything held here that is only true of ONE recording session: the series
+ * themselves, the timebase they are drawn against (the device's uptime, which
+ * restarts when it does), and the view a person froze over a span of it. Two
+ * things end a session — switching radios, and the link dropping — and neither
+ * leaves any of it meaningful.
+ *
+ * Not the pills: the window and the attribute toggle are the reader's choices,
+ * not the session's, and survive both. */
+function resetSession() {
+  devClock = 0; devClockAt = 0; recs = []; proofLinks = new Map()
   floorSeries = Array.from({ length: CH_MAX }, () => [])
   floorLastMs = 0; chansRaw = ''; chanList.value = []
   chanCanvas.clear()
+  peerByTag.value = new Map()
   zoomStack.value = []; sel.value = null
+  hoverFrac.value = null
   tick()
   if (props.visible) nextTick(redraw)
-})
+}
+
+watch(activeRadio, resetSession)
+
+/* A reconnect is a new session, whatever it interrupted.
+ *
+ * The frames are usually gone on the device — the web watch key is gated on the
+ * link, so it fell when the link did and the recorder dropped every radio's
+ * subtree; they survive only where the device's own LCD app was watching too,
+ * and then the dump carries exactly what it recorded. Either way the mirror is
+ * made to agree with the device by the dump that ends here, since the packet
+ * and peer subtrees are declared snapshot-authoritative in onMounted. What is
+ * left to drop is what is held in this file, and the timebase is the
+ * load-bearing part:
+ * `devNow()` extrapolates from wall-clock, so it marches on through an outage
+ * of any length, and a device that came back up meanwhile is stamping records
+ * from a clock that restarted near zero. Anchored to the old boot they land
+ * tens of thousands of seconds "in the past", left of every window, and the
+ * graph glides on drawing nothing — which looks exactly like a dead radio.
+ * Anchored to nothing, the first record of the new session sets the clock and
+ * the graph fills forward from the reconnect, which is the rule everywhere
+ * else here. `restarted()` stays as the backstop for a restart that somehow
+ * does not cost the link. */
+watch(() => device.syncEpoch, resetSession)
 </script>
 
 <style scoped>
