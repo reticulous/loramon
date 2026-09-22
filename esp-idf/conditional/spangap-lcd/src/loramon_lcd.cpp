@@ -1028,7 +1028,7 @@ void tickCb(lv_timer_t*) { if (s.visible) drawAll(); }
 lv_obj_t* mkFloat(lv_obj_t* root, uint32_t colour) {
     lv_obj_t* l = lv_label_create(root);
     lv_label_set_text(l, "");
-    lv_obj_set_style_text_font(l, lcdFont(LcdFace::MONO, 8), 0);
+    lv_obj_set_style_text_font(l, lcdFontMono(), 0);
     lv_obj_set_style_text_color(l, lv_color_hex(colour), 0);
     lv_obj_set_style_bg_color(l, lv_color_hex(0x101010), 0);
     lv_obj_set_style_bg_opa(l, LV_OPA_80, 0);
@@ -1054,7 +1054,7 @@ lv_obj_t* mkCaption(lv_obj_t* root, int y, const char* text) {
     lv_obj_t* l = lv_label_create(root);
     lv_label_set_recolor(l, true);
     lv_label_set_text(l, text);
-    lv_obj_set_style_text_font(l, lcdFont(LcdFace::MONO, 8), 0);
+    lv_obj_set_style_text_font(l, lcdFontMono(), 0);
     lv_obj_set_style_text_color(l, lv_color_hex(0xC8C8C8), 0);
     lv_obj_align(l, LV_ALIGN_TOP_LEFT, GUT_L + 2, y);
     return l;
@@ -1081,7 +1081,7 @@ void mkScale(lv_obj_t* root, const Axis& a, bool left) {
         char b[8];
         snprintf(b, sizeof b, "%d", a.lo + i * (a.hi - a.lo) / NBANDS);
         lv_label_set_text(l, b);
-        lv_obj_set_style_text_font(l, lcdFont(LcdFace::MONO, 8), 0);
+        lv_obj_set_style_text_font(l, lcdFontMono(), 0);
         lv_obj_set_style_text_color(l, lv_color_hex(0x8A8A8A), 0);
         lv_obj_set_width(l, (left ? GUT_L : GUT_R) - 3);
         lv_obj_set_style_text_align(l, left ? LV_TEXT_ALIGN_RIGHT : LV_TEXT_ALIGN_LEFT, 0);
@@ -1098,7 +1098,7 @@ void mkAxisName(lv_obj_t* root, const char* text, bool left) {
     int y = (scaleLabelY(NBANDS) + scaleLabelY(NBANDS - 1)) / 2;
     lv_obj_t* l = lv_label_create(root);
     lv_label_set_text(l, text);
-    lv_obj_set_style_text_font(l, lcdFont(LcdFace::MONO, 8), 0);
+    lv_obj_set_style_text_font(l, lcdFontMono(), 0);
     lv_obj_set_style_text_color(l, lv_color_hex(0xC8C8C8), 0);
     lv_obj_set_width(l, (left ? GUT_L : GUT_R) - 3);
     lv_obj_set_style_text_align(l, left ? LV_TEXT_ALIGN_RIGHT : LV_TEXT_ALIGN_LEFT, 0);
@@ -1233,7 +1233,7 @@ lv_obj_t* mkTab(lv_obj_t* root, const char* label, int idx, int x, int w) {
     lv_obj_add_event_cb(b, tabEventCb, LV_EVENT_CLICKED, (void*)(intptr_t)idx);
     lv_obj_t* l = lv_label_create(b);
     lv_label_set_text(l, label);
-    lv_obj_set_style_text_font(l, lcdFont(LcdFace::MONO, 8), 0);
+    lv_obj_set_style_text_font(l, lcdFontMono(), 0);
     lv_obj_center(l);
     return b;
 }
@@ -1251,7 +1251,7 @@ lv_obj_t* mkPill(lv_obj_t* root, const char* label, int idx, int x, int y, int w
     lv_obj_add_event_cb(b, cb, LV_EVENT_CLICKED, (void*)(intptr_t)idx);
     lv_obj_t* l = lv_label_create(b);
     lv_label_set_text(l, label);
-    lv_obj_set_style_text_font(l, lcdFont(LcdFace::MONO, 8), 0);
+    lv_obj_set_style_text_font(l, lcdFontMono(), 0);
     lv_obj_set_style_text_color(l, lv_color_hex(0xC8C8C8), 0);
     lv_obj_center(l);
     return b;
@@ -1294,7 +1294,7 @@ lv_obj_t* mkCheck(lv_obj_t* root, int x, int y, int h, int w, const char* captio
 
     lv_obj_t* cap = lv_label_create(slot);
     lv_label_set_text(cap, caption);
-    lv_obj_set_style_text_font(cap, lcdFont(LcdFace::MONO, 8), 0);
+    lv_obj_set_style_text_font(cap, lcdFontMono(), 0);
     lv_obj_set_style_text_color(cap, lv_color_hex(0xC8C8C8), 0);
     lv_obj_align(cap, LV_ALIGN_LEFT_MID, CB_BOX + 4, 0);
     return slot;
@@ -1389,7 +1389,7 @@ void LoraMonApp::onCreate(lv_obj_t* root) {
     s.back = mkPill(root, "<", 0, 0, top + 1, pw, backEventCb);
     s.zoomLbl = lv_label_create(root);
     lv_label_set_text(s.zoomLbl, "");
-    lv_obj_set_style_text_font(s.zoomLbl, lcdFont(LcdFace::MONO, 8), 0);
+    lv_obj_set_style_text_font(s.zoomLbl, lcdFontMono(), 0);
     lv_obj_set_style_text_color(s.zoomLbl, lv_color_hex(0x7A7A7A), 0);
     lv_obj_align(s.zoomLbl, LV_ALIGN_TOP_LEFT, pw + 4, top + 5);
     lv_obj_add_flag(s.zoomLbl, LV_OBJ_FLAG_HIDDEN);

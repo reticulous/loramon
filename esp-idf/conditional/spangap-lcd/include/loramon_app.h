@@ -16,10 +16,14 @@
 
 #include "lcd_app.h"   /* LcdApp (a Service) */
 #include "lvgl.h"      /* lv_obj_t */
+#include "sdkconfig.h" /* CONFIG_LORA_COUNT */
 
 class LoraMonApp : public LcdApp {
 public:
     LoraMonApp();
+    /* Nothing to watch on a board with no radio: iface-lora is staged and inert
+     * there, so the tile would open onto an empty graph. */
+    bool available() const override { return CONFIG_LORA_COUNT > 0; }
     void onCreate(lv_obj_t* root) override;
     void onShow() override;
     void onHide() override;
